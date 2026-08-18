@@ -81,6 +81,16 @@ function removeClient(ws) {
 
 const server = http.createServer((req, res) => {
   const reqUrl = new URL(req.url, 'http://localhost');
+
+  // Test-only graceful shutdown endpoint (local only)
+  if (reqUrl.pathname === '/__shutdown') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ok: true, pid: process.pid }));
+    // allow response to flush
+    setTimeout(() => process.exit(0), 50);
+    return;
+  }
+
   const safePath = reqUrl.pathname === '/' ? '/index.html' : reqUrl.pathname;
   const filePath = path.join(ROOT, safePath);
 
@@ -93,9 +103,9 @@ const server = http.createServer((req, res) => {
   fs.readFile(filePath, (err, data) => {
     if (err) {
       if (reqUrl.pathname === '/health') {
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ ok: true, rooms: Array.from(rooms.keys()) }));
-        return;
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ ok: true, pid: process.pid, rooms: Array.from(rooms.keys()) }));
+            return;
       }
       res.writeHead(404, { 'Content-Type': 'text/plain' });
       res.end('Not found');
@@ -106,7 +116,7 @@ const server = http.createServer((req, res) => {
     const mime = {
       '.html': 'text/html; charset=utf-8',
       '.js': 'application/javascript; charset=utf-8',
-      '.css': 'text/css; charset=utf-8',
+      '.css': 'text/css',
       '.json': 'application/json; charset=utf-8',
       '.png': 'image/png',
       '.jpg': 'image/jpeg',
