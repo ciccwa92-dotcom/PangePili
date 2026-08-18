@@ -2513,8 +2513,10 @@ function connectRoomSocket() {
           console.log('[CLIENT-PLAYER-PLAY-RECEIVED]', { room: msg.room, from: msg.player, slot: msg.slot, ev: msg.ev, trickLen: Array.isArray(msg.trick) ? msg.trick.length : null, mid: msg.__mid });
           try {
             // if this broadcast corresponds to a locally sent play, clear its retry state
+            var wasLocalPlay = false;
             try {
               if (msg && msg.__mid && window.pendingPlaySends && window.pendingPlaySends[msg.__mid]) {
+                wasLocalPlay = true;
                 console.log('[CLIENT-PLAY-ACK-RECEIVED]', { mid: msg.__mid });
                 delete window.pendingPlaySends[msg.__mid];
               }
@@ -2528,18 +2530,25 @@ function connectRoomSocket() {
                 try {
                   var src = Number(msg.slot);
                   if (!isNaN(src) && G.hands && Array.isArray(G.hands[src])) {
-                    var removed = false;
-                    for (var r = 0; r < G.hands[src].length; r++) {
-                      var hc = G.hands[src][r];
-                      if (!hc) continue;
-                      if ((!!hc.j === !!(msg.card && msg.card.j)) && (hc.v === (msg.card && msg.card.v))) {
-                        G.hands[src].splice(r, 1);
-                        removed = true; break;
+                    if (!wasLocalPlay) {
+                      var removed = false;
+                      for (var r = 0; r < G.hands[src].length; r++) {
+                        var hc = G.hands[src][r];
+                        if (!hc) continue;
+                        if ((!!hc.j === !!(msg.card && msg.card.j)) && (hc.v === (msg.card && msg.card.v))) {
+                          G.hands[src].splice(r, 1);
+                          removed = true; break;
+                        }
                       }
-                    }
-                    if (!removed && G.hands[src].length > 0) {
-                      // fallback: drop one card to keep counts consistent
-                      G.hands[src].splice(0,1);
+                      if (!removed && G.hands[src].length > 0) {
+                        // fallback: drop one card to keep counts consistent
+                        G.hands[src].splice(0,1);
+                      }
+                    } else {
+                      // This play originated locally and was already applied by playCard(),
+                      // avoid removing a second card here. We still trust the server snapshot
+                      // so no action required on the hand contents.
+                      console.log('[CLIENT-PLAYER-PLAY-APPLY-SKIP-HAND]', { src: src, mid: msg.__mid });
                     }
                   }
                 } catch(e2) { console.warn('[CLIENT-PLAYER-PLAY-APPLY-HAND-ERR]', String(e2)); }
