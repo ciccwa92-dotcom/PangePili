@@ -1238,7 +1238,8 @@ function isPredictionAllowed(pi, n) {
 }
 
 function humanPredict(n) {
-  if (G.phase !== 'predict' || !isHumanPlayer(G.predTurn)) return;
+  // Only allow local human to submit prediction when it's their turn
+  if (!G || G.phase !== 'predict' || G.localHumanIndex === undefined || G.localHumanIndex === null || G.predTurn !== G.localHumanIndex) return;
   var pi = G.predTurn;
   if (!isPredictionAllowed(pi, n)) {
     showToast('L’ultima previsione non può far chiudere il totale a ' + G.mission.n + '!', 2000);
@@ -1299,69 +1300,75 @@ function advancePrediction() {
 }
 
 function aiPredict() {
-  if (!G || G.phase !== 'predict' || G.predTurn === 0) return;
+  if (!G || G.phase !== 'predict') return;
   var pi = G.predTurn;
-  if (G.pred[pi] !== null) return;
-  var h = G.hands[pi];
-  var candidates = [];
-  for (var n2 = 0; n2 <= G.mission.n; n2++) {
-    if (G.mission.nz && n2 === 0) continue;
-    if (isPredictionAllowed(pi, n2)) candidates.push(n2);
-  }
-  var high = h.filter(function(c){ return c.j || c.v >= 30; }).length;
-  var difficulty = getAiDifficulty();
-  var p = Math.round(high * 0.6 + Math.random() * 0.8);
-
-  if (difficulty === 'easy') {
-    p = Math.max(0, p - 2 + Math.floor(Math.random() * 5));
-    if (Math.random() < 0.6) {
-      p = Math.min(G.mission.n, Math.max(0, p + 2 + Math.floor(Math.random() * 3)));
+  // Instrumentation: log start of AI predict attempt
+  try { console.log('[AI-PREDICT-START]', { seat: pi, mission: !!G.mission, isHost: !!(roomSession && roomSession.isHost) }); } catch(e){}
+  try {
+    if (G.pred[pi] !== null) return;
+    var h = G.hands[pi];
+    var candidates = [];
+    for (var n2 = 0; n2 <= G.mission.n; n2++) {
+      if (G.mission.nz && n2 === 0) continue;
+      if (isPredictionAllowed(pi, n2)) candidates.push(n2);
     }
-  } else if (difficulty === 'hard') {
-    p = Math.max(0, Math.min(G.mission.n, Math.round(high * 0.45 + Math.random() * 0.8)));
-    if (high <= 2) p = Math.max(G.mission.nz ? 1 : 0, Math.min(G.mission.n, p + 1));
-  }
+    var high = h.filter(function(c){ return c.j || c.v >= 30; }).length;
+    var difficulty = getAiDifficulty();
+    var p = Math.round(high * 0.6 + Math.random() * 0.8);
 
-  p = Math.max(G.mission.nz ? 1 : 0, Math.min(p, G.mission.n));
-  if (!candidates.length) candidates = [Math.max(G.mission.nz ? 1 : 0, G.mission.n)];
-
-  var chosen;
-  if (difficulty === 'hard') {
-    var closest = null;
-    var bestDelta = 999;
-    for (var i = 0; i < candidates.length; i++) {
-      var d = Math.abs(candidates[i] - p);
-      if (d < bestDelta || (d === bestDelta && candidates[i] < (closest === null ? 999 : closest))) {
-        closest = candidates[i];
-        bestDelta = d;
+    if (difficulty === 'easy') {
+      p = Math.max(0, p - 2 + Math.floor(Math.random() * 5));
+      if (Math.random() < 0.6) {
+        p = Math.min(G.mission.n, Math.max(0, p + 2 + Math.floor(Math.random() * 3)));
       }
+    } else if (difficulty === 'hard') {
+      p = Math.max(0, Math.min(G.mission.n, Math.round(high * 0.45 + Math.random() * 0.8)));
+      if (high <= 2) p = Math.max(G.mission.nz ? 1 : 0, Math.min(G.mission.n, p + 1));
     }
-    chosen = closest !== null ? closest : candidates[0];
-  } else if (difficulty === 'easy') {
-    if (Math.random() < 0.65) {
-      chosen = candidates[candidates.length - 1] || candidates[0];
+
+    p = Math.max(G.mission.nz ? 1 : 0, Math.min(p, G.mission.n));
+    if (!candidates.length) candidates = [Math.max(G.mission.nz ? 1 : 0, G.mission.n)];
+
+    var chosen;
+    if (difficulty === 'hard') {
+      var closest = null;
+      var bestDelta = 999;
+      for (var i = 0; i < candidates.length; i++) {
+        var d = Math.abs(candidates[i] - p);
+        if (d < bestDelta || (d === bestDelta && candidates[i] < (closest === null ? 999 : closest))) {
+          closest = candidates[i];
+          bestDelta = d;
+        }
+      }
+      chosen = closest !== null ? closest : candidates[0];
+    } else if (difficulty === 'easy') {
+      if (Math.random() < 0.65) {
+        chosen = candidates[candidates.length - 1] || candidates[0];
+      } else {
+        chosen = candidates[Math.floor(Math.random() * candidates.length)] || candidates[0];
+      }
+      if (chosen < p && Math.random() < 0.45) {
+        var alt = candidates.filter(function(v){ return v >= p; })[0] || candidates[candidates.length - 1] || chosen;
+        if (alt !== undefined) chosen = alt;
+      }
     } else {
-      chosen = candidates[Math.floor(Math.random() * candidates.length)] || candidates[0];
+      chosen = candidates.filter(function(v){ return v >= p; })[0] || candidates[0];
     }
-    if (chosen < p && Math.random() < 0.45) {
-      var alt = candidates.filter(function(v){ return v >= p; })[0] || candidates[candidates.length - 1] || chosen;
-      if (alt !== undefined) chosen = alt;
-    }
-  } else {
-    chosen = candidates.filter(function(v){ return v >= p; })[0] || candidates[0];
-  }
 
-  if (G.mission.noCopy) {
-    var total = getTotalPlayers();
-    var prev = (pi + total - 1) % total;
-    if (G.pred[prev] !== null) {
-      var sameAsPrev = candidates.filter(function(v){ return v !== G.pred[prev]; });
-      if (sameAsPrev.length) {
-        chosen = sameAsPrev[Math.floor(Math.random() * sameAsPrev.length)] || chosen;
+    if (G.mission.noCopy) {
+      var total = getTotalPlayers();
+      var prev = (pi + total - 1) % total;
+      if (G.pred[prev] !== null) {
+        var sameAsPrev = candidates.filter(function(v){ return v !== G.pred[prev]; });
+        if (sameAsPrev.length) {
+          chosen = sameAsPrev[Math.floor(Math.random() * sameAsPrev.length)] || chosen;
+        }
       }
     }
+    submitPrediction(pi, chosen);
+  } catch (e) {
+    console.error('[AI-PREDICT-ERROR]', { seat: pi, err: (e && (e.stack || e.message || String(e))) });
   }
-  submitPrediction(pi, chosen);
 }
 
 /* ═══════════════════════════════════
@@ -1374,12 +1381,16 @@ function scheduleAI() {
 
 function runAI() {
   if (!G) return;
+  // Only the host (or a local single-player session createdByMe) should run AI simulation.
+  // This prevents every client from independently simulating AI moves and causing cumulative desyncs.
+  if (!roomSession.isHost && !roomSession.createdByMe) return;
   if (G.phase === 'predict' && !isHumanPlayer(G.predTurn)) { aiPredict(); return; }
   if (G.phase === 'play' && !isHumanPlayer(G.cur)) { aiPlayCard(); return; }
 }
 
 window.playerSelectPassCard = function(ci) {
-  if (!G || G.phase !== 'pass' || !isHumanPlayer(G.cur)) return;
+  // Only allow local human to select pass cards when it's their turn
+  if (!G || G.phase !== 'pass' || G.localHumanIndex === undefined || G.localHumanIndex === null || G.cur !== G.localHumanIndex) return;
   var pi = G.cur;
   var hand = G.hands[pi] || [];
   if (!hand[ci]) return;
@@ -1401,7 +1412,8 @@ window.playerSelectPassCard = function(ci) {
 };
 
 window.playerPlayCard = function(ci) {
-  if (!G || G.phase !== 'play' || !isHumanPlayer(G.cur)) return;
+  // Only allow local human to play when it's their local turn
+  if (!G || G.phase !== 'play' || G.localHumanIndex === undefined || G.localHumanIndex === null || G.cur !== G.localHumanIndex) return;
   var pi = G.cur;
   var card = G.hands[pi] ? G.hands[pi][ci] : null;
   if (!card) return;
@@ -1542,69 +1554,90 @@ $id('trade-cancel').onclick = function() {
 };
 
 function aiPlayCard() {
-  if (!G || G.phase !== 'play' || G.cur === 0) return;
+  if (!G || G.phase !== 'play') return;
   var pi = G.cur;
-  var hand = G.hands[pi];
-  if (!hand || !hand.length) return;
+  // Instrumentation: log start of AI play attempt
+  try { console.log('[AI-PLAYCARD-START]', { seat: pi, mission: !!G.mission, isHost: !!(roomSession && roomSession.isHost) }); } catch(e){}
+  try {
+    var hand = G.hands[pi];
+    if (!hand || !hand.length) return;
 
-  var need = G.pred[pi] - G.taken[pi];
-  var curHigh = G.trick.length
-    ? Math.max.apply(null, G.trick.map(function(t){ return t.ev; }))
-    : 0;
-  var wantWin = need > 0;
-  var difficulty = getAiDifficulty();
+    var need = G.pred[pi] - G.taken[pi];
+    var curHigh = G.trick.length
+      ? Math.max.apply(null, G.trick.map(function(t){ return t.ev; }))
+      : 0;
+    var wantWin = need > 0;
+    var difficulty = getAiDifficulty();
 
-  var jollyProvEv = wantWin ? 55 : 1;
-  var sorted = hand.map(function(c, i){ return {c:c, i:i, ev: c.j ? jollyProvEv : c.v}; })
-                   .sort(function(a,b){ return a.ev - b.ev; });
+    var jollyProvEv = wantWin ? 55 : 1;
+    var sorted = hand.map(function(c, i){ return {c:c, i:i, ev: c.j ? jollyProvEv : c.v}; })
+                     .sort(function(a,b){ return a.ev - b.ev; });
 
-  if (G.mission && G.mission.inverse) {
-    if (G.trick.length === 0) {
-      var invChoice = sorted[sorted.length - 1] || sorted[0];
-      var actualEv = invChoice.c.j ? (wantWin ? 56 : 0) : invChoice.c.v;
-      playCard(pi, invChoice.i, actualEv);
+    if (G.mission && G.mission.inverse) {
+      if (G.trick.length === 0) {
+        var invChoice = sorted[sorted.length - 1] || sorted[0];
+        var actualEv = invChoice.c.j ? (wantWin ? 56 : 0) : invChoice.c.v;
+        playCard(pi, invChoice.i, actualEv);
+        return;
+      }
+      var invHighest = sorted[sorted.length - 1];
+      var invLowest = sorted[0];
+      var choice = wantWin ? invLowest : invHighest;
+      var actualEv = choice.c.j ? (wantWin ? 0 : 56) : choice.c.v;
+      playCard(pi, choice.i, actualEv);
       return;
     }
-    var invHighest = sorted[sorted.length - 1];
-    var invLowest = sorted[0];
-    var choice = wantWin ? invLowest : invHighest;
-    var actualEv = choice.c.j ? (wantWin ? 0 : 56) : choice.c.v;
-    playCard(pi, choice.i, actualEv);
-    return;
-  }
 
-  if (G.mission && G.mission.edgeOnly) {
-    var vals = hand.map(function(c){ return c && c.j ? 56 : (c ? c.v : 0); });
-    var minV = Math.min.apply(null, vals);
-    var maxV = Math.max.apply(null, vals);
-    var allowed = sorted.filter(function(x){ return x.c.j || x.c.v === minV || x.c.v === maxV; });
-    var edgeChoice = allowed[wantWin ? allowed.length - 1 : 0] || sorted[wantWin ? sorted.length - 1 : 0];
-    var actualEv = edgeChoice.c.j ? (wantWin ? 56 : 0) : edgeChoice.c.v;
-    playCard(pi, edgeChoice.i, actualEv);
-    return;
-  }
-
-  var winners = sorted.filter(function(x){ return x.ev > curHigh; });
-  var losers  = sorted.filter(function(x){ return x.ev <= curHigh; });
-
-  var choice;
-  if (difficulty === 'easy') {
-    if (Math.random() < 0.6) {
-      choice = wantWin ? (winners.length ? winners[winners.length - 1] : sorted[sorted.length - 1]) : (losers.length ? losers[Math.floor(Math.random() * Math.min(losers.length, 2))] : sorted[0]);
-    } else {
-      choice = sorted[Math.floor(Math.random() * sorted.length)] || sorted[0];
+    if (G.mission && G.mission.edgeOnly) {
+      var vals = hand.map(function(c){ return c && c.j ? 56 : (c ? c.v : 0); });
+      var minV = Math.min.apply(null, vals);
+      var maxV = Math.max.apply(null, vals);
+      var allowed = sorted.filter(function(x){ return x.c.j || x.c.v === minV || x.c.v === maxV; });
+      var edgeChoice = allowed[wantWin ? allowed.length - 1 : 0] || sorted[wantWin ? sorted.length - 1 : 0];
+      var actualEv = edgeChoice.c.j ? (wantWin ? 56 : 0) : edgeChoice.c.v;
+      playCard(pi, edgeChoice.i, actualEv);
+      return;
     }
-  } else if (difficulty === 'hard') {
-    if (wantWin) {
+
+    var winners = sorted.filter(function(x){ return x.ev > curHigh; });
+    var losers  = sorted.filter(function(x){ return x.ev <= curHigh; });
+
+    var choice;
+    if (difficulty === 'easy') {
+      if (Math.random() < 0.6) {
+        choice = wantWin ? (winners.length ? winners[winners.length - 1] : sorted[sorted.length - 1]) : (losers.length ? losers[Math.floor(Math.random() * Math.min(losers.length, 2))] : sorted[0]);
+      } else {
+        choice = sorted[Math.floor(Math.random() * sorted.length)] || sorted[0];
+      }
+    } else if (difficulty === 'hard') {
+      if (wantWin) {
+        if (G.mission.id === 1) {
+          var dangerRange = G.mission.dangerRange || [2,9];
+          var safeW = winners.filter(function(x){ return !isDanger({j:false,v:x.ev}, dangerRange); });
+          choice = (safeW[0] || winners[0] || sorted[0]);
+        } else {
+          choice = winners[0] || sorted[0];
+        }
+        if (G.trick.length === 0) {
+          choice = sorted[0];
+        }
+      } else {
+        if (G.mission.id === 1) {
+          var dangerRange = G.mission.dangerRange || [2,9];
+          var safeAll = sorted.filter(function(x){ return !isDanger({j:false,v:x.ev}, dangerRange); });
+          var base = safeAll.length ? safeAll : sorted;
+          choice = base.filter(function(x){ return x.ev <= curHigh; })[0] || base[0];
+        } else {
+          choice = losers[0] || sorted[0];
+        }
+      }
+    } else if (wantWin) {
       if (G.mission.id === 1) {
         var dangerRange = G.mission.dangerRange || [2,9];
         var safeW = winners.filter(function(x){ return !isDanger({j:false,v:x.ev}, dangerRange); });
-        choice = (safeW[0] || winners[0] || sorted[0]);
+        choice = safeW[0] || winners[0] || sorted[sorted.length - 1];
       } else {
-        choice = winners[0] || sorted[0];
-      }
-      if (G.trick.length === 0) {
-        choice = sorted[0];
+        choice = winners[0] || sorted[sorted.length - 1];
       }
     } else {
       if (G.mission.id === 1) {
@@ -1616,37 +1649,22 @@ function aiPlayCard() {
         choice = losers[0] || sorted[0];
       }
     }
-  } else if (wantWin) {
-    if (G.mission.id === 1) {
-      var dangerRange = G.mission.dangerRange || [2,9];
-      var safeW = winners.filter(function(x){ return !isDanger({j:false,v:x.ev}, dangerRange); });
-      choice = safeW[0] || winners[0] || sorted[sorted.length - 1];
-    } else {
-      choice = winners[0] || sorted[sorted.length - 1];
-    }
-  } else {
-    if (G.mission.id === 1) {
-      var dangerRange = G.mission.dangerRange || [2,9];
-      var safeAll = sorted.filter(function(x){ return !isDanger({j:false,v:x.ev}, dangerRange); });
-      var base = safeAll.length ? safeAll : sorted;
-      choice = base.filter(function(x){ return x.ev <= curHigh; })[0] || base[0];
-    } else {
-      choice = losers[0] || sorted[0];
-    }
-  }
 
-  var actualEv;
-  if (choice.c.j) {
-    if (wantWin) {
-      actualEv = curHigh > 0 ? Math.min(curHigh + 1, 56) : 56;
+    var actualEv;
+    if (choice.c.j) {
+      if (wantWin) {
+        actualEv = curHigh > 0 ? Math.min(curHigh + 1, 56) : 56;
+      } else {
+        actualEv = 0;
+      }
     } else {
-      actualEv = 0;
+      actualEv = choice.c.v;
     }
-  } else {
-    actualEv = choice.c.v;
-  }
 
-  playCard(pi, choice.i, actualEv);
+    playCard(pi, choice.i, actualEv);
+  } catch (e) {
+    console.error('[AI-PLAYCARD-ERROR]', { seat: pi, err: (e && (e.stack || e.message || String(e))) });
+  }
 }
 
 function playCard(pi, ci, ev) {
@@ -2542,6 +2560,10 @@ function connectRoomSocket() {
                       }
                       if (!removed && G.hands[src].length > 0) {
                         // fallback: drop one card to keep counts consistent
+                        // Log this explicitly so any desyncs are visible in logs for diagnosis
+                        try {
+                          console.warn('[CLIENT-HAND-DESYNC-FALLBACK]', { src: src, expectedCard: msg.card, handSnapshot: (G.hands[src] || []).slice(), mid: msg.__mid, player: msg.player });
+                        } catch(e) { console.warn('[CLIENT-HAND-DESYNC-FALLBACK-ERR]', String(e)); }
                         G.hands[src].splice(0,1);
                       }
                     } else {
